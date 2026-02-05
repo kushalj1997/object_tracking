@@ -1,0 +1,20 @@
+{
+  "configurations": [
+    {
+      "name": "macOS",
+      "includePath": [
+        "/opt/homebrew/include",
+        "./",
+      ],
+      "defines": [
+        // Define any necessary macros here
+      ],
+      "cStandard": "c23",
+      "cppStandard": "c++23",
+      "intelliSenseMode": "${default}",
+      "compilerPath": "/usr/bin/g++",
+      "standardIncludes": true,
+    }
+  ],
+  "version": 0.1
+}

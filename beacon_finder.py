@@ -96,9 +96,6 @@ class Drone:
             z = start_location.z + (end_location.z - start_location.z) * i / total_states
             self.states.append(ECEF_Point(x, y, z))
 
-
-        
-
     def fly_to(self):
         angle = random.uniform(0, 2 * math.pi)
         dx = distance * math.cos(angle)
