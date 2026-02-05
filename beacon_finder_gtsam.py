@@ -47,7 +47,7 @@ def cov_ellipse_params(P, nsig=2):
     return width, height, angle
 
 
-def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200):
+def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=300):
     """Run factor graph optimization at each step and visualize."""
     # Ground-truth beacon (from LLA in Simulation)
     beacon_lla = LLA_Point(42.628356390253714, -83.10454313558542, 400)
@@ -67,10 +67,18 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
 
     # GTSAM setup
     # Weak prior so measurements can drive the estimate
-    noise_model_prior = gtsam.noiseModel.Isotropic.Sigma(2, 10000.0)
-    # Tighter measurement noise to allow covariance to shrink visibly
-    meas_sigma = 20.0
-    noise_model_meas = gtsam.noiseModel.Isotropic.Sigma(2, meas_sigma)
+    prior_sigma = 10000.0
+    noise_model_prior = gtsam.noiseModel.Isotropic.Sigma(2, prior_sigma)
+
+    # Scenario: start with many high-uncertainty (high-cov) frames,
+    # then switch to low-noise measurements so covariance visibly shrinks.
+    high_sigma = 2000.0
+    low_sigma = 20.0
+    initial_high_frames = int(num_steps * 0.45)
+
+    # Faulty / outlier measurement probability during high-cov ramp
+    outlier_prob = 0.15
+    outlier_bias = np.array([5000.0, -4000.0])
 
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_xlabel("ECEF X (m)")
@@ -82,7 +90,8 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
 
     # Set axis limits based on drone path and beacon
     all_points = np.vstack([drone_path, beacon_xy])
-    margin = 2000
+    # Smaller margin so ellipse size is more visually prominent
+    margin = 500
     ax.set_xlim(all_points[:, 0].min() - margin, all_points[:, 0].max() + margin)
     ax.set_ylim(all_points[:, 1].min() - margin, all_points[:, 1].max() + margin)
 
@@ -107,9 +116,9 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
         1,
         1,
         edgecolor="green",
-        facecolor="green",
-        alpha=0.15,
-        lw=2,
+        facecolor="none",
+        alpha=0.9,
+        lw=3,
         label="Covariance (2σ)",
     )
     ax.add_patch(cov_ellipse)
@@ -125,6 +134,7 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
     ax.legend(loc="upper left")
 
     trace_text = ax.text(0.02, 0.95, "", transform=ax.transAxes)
+    trace_history = []
 
     def init():
         drone_line.set_data([], [])
@@ -160,19 +170,34 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
             beacon_key, gtsam.Point2(beacon_prior[0], beacon_prior[1])
         )
 
-        # Add measurement factors for each drone position seen so far
+        # Add measurement factors for each drone position seen so far.
+        # Early frames use very noisy measurements (high covariance) and
+        # occasionally include faulty/outlier readings; later frames use
+        # low-noise measurements so the covariance will shrink visibly.
         for j in range(i + 1):
+            if j < initial_high_frames:
+                meas_sigma_j = high_sigma
+            else:
+                meas_sigma_j = low_sigma
+
+            noise_model_meas_j = gtsam.noiseModel.Isotropic.Sigma(2, meas_sigma_j)
+
             # Simulated measurement: noisy observation of beacon from drone j
             meas_noise = np.random.multivariate_normal(
-                [0, 0], np.diag([meas_sigma**2, meas_sigma**2])
+                [0, 0], np.diag([meas_sigma_j**2, meas_sigma_j**2])
             )
-            z = beacon_xy + meas_noise
+
+            # Occasionally inject a faulty measurement (bias) during high-cov phase
+            if (j < initial_high_frames) and (np.random.rand() < outlier_prob):
+                z = beacon_xy + meas_noise + outlier_bias
+            else:
+                z = beacon_xy + meas_noise
 
             graph.add(
                 gtsam.PriorFactorPoint2(
                     beacon_key,
                     gtsam.Point2(z[0], z[1]),
-                    noise_model_meas,
+                    noise_model_meas_j,
                 )
             )
 
@@ -201,11 +226,20 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
             print(f"Marginals failed at step {i}: {e}")
             P = np.diag([1e10, 1e10])  # fallback
 
-        # Simulated measurement for display
+        # Simulated measurement for display (use current-frame noise level)
+        if i < initial_high_frames:
+            meas_sigma_display = high_sigma
+        else:
+            meas_sigma_display = low_sigma
+
         meas_noise = np.random.multivariate_normal(
-            [0, 0], np.diag([meas_sigma**2, meas_sigma**2])
+            [0, 0], np.diag([meas_sigma_display**2, meas_sigma_display**2])
         )
-        z = beacon_xy + meas_noise
+        # occasionally show a faulty reading in display as well
+        if (i < initial_high_frames) and (np.random.rand() < outlier_prob):
+            z = beacon_xy + meas_noise + outlier_bias
+        else:
+            z = beacon_xy + meas_noise
 
         # Update plot elements
         drone_line.set_data(drone_so_far[:, 0], drone_so_far[:, 1])
@@ -221,8 +255,10 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
         # Update trace text
         trace_val = np.trace(P)
         dist_to_beacon = np.linalg.norm(current_drone_pos - beacon_xy)
+        trace_history.append(float(trace_val))
+        meas_sigma_now = meas_sigma_display
         trace_text.set_text(
-            f"trace(P): {trace_val:.0f} | Distance to beacon: {dist_to_beacon:.0f} m"
+            f"trace(P): {trace_val:.0f} | Dist: {dist_to_beacon:.0f} m | meas_sigma: {meas_sigma_now:.0f}"
         )
 
         return drone_line, drone_pos, meas_scatter, est_point, cov_ellipse, trace_text
@@ -245,6 +281,14 @@ def run_gtsam_kf_video(output_path="beacon_covariance_gtsam.mp4", num_steps=200)
             print(f"Saved animation to {gif_path}")
         except Exception as e2:
             print("Failed to save animation with fallback writers:", e2)
+    # dump trace history for inspection
+    try:
+        with open(output_path.rsplit(".", 1)[0] + "_trace.txt", "w") as fh:
+            for v in trace_history:
+                fh.write(f"{v}\n")
+        print("Wrote trace history to", output_path.rsplit(".", 1)[0] + "_trace.txt")
+    except Exception as e:
+        print("Failed to write trace history:", e)
 
 
 if __name__ == "__main__":
