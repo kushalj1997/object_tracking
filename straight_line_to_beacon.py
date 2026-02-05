@@ -4,10 +4,12 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
-"""Simple beacon finder visualization.
+"""Straight-line-to-beacon visualization.
 
 This script generates a straight-line drone trajectory from a start LLA point
 to a beacon LLA point and plots the drone path and beacon location (top-down).
+
+Filename: straight_line_to_beacon.py
 """
 
 
@@ -95,4 +97,5 @@ if __name__ == "__main__":
     sim = Simulation(drone_start_lla, beacon_lla)
     path, beacon_pos = sim.run(num_points=200)
 
-    plot_topdown(path, beacon_pos)
+    # save plot for non-interactive environments
+    plot_topdown(path, beacon_pos, show=False, save_path="beacon_plot.png")
